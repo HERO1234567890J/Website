@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.prettierrc
+oxlint.json
+README.md
+test
+vitest.config.e2e.ts
+vitest.config.ts
+tsconfig.build.tsbuildinfo
+tsconfig.app.tsbuildinfo
+tsconfig.node.tsbuildinfo

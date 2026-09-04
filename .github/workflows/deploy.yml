@@ -1,0 +1,106 @@
+# ─── D-Trips — Deploy (§32) ───────────────────────────────────────
+#
+# On merge to main → build Docker images, deploy to VPS, run migrations.
+#
+# Required GitHub Actions secrets:
+#   VPS_HOST          — VPS IP or hostname
+#   VPS_SSH_KEY       — private SSH key for the deploy user
+#   VPS_SSH_USER      — SSH username (default: deploy)
+#   DEPLOY_PATH       — path to the project on VPS (default: /opt/d-trips)
+# ────────────────────────────────────────────────────────────────────
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  VPS_SSH_USER: ${{ secrets.VPS_SSH_USER || 'deploy' }}
+  DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/d-trips' }}
+
+jobs:
+  deploy:
+    name: Build & Deploy to VPS
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ─── SSH setup ──────────────────────────────────────────────
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ─── Deploy code via rsync ─────────────────────────────────
+      - name: Sync code to VPS
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            --exclude 'backups' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ ${{ env.VPS_SSH_USER }}@${{ env.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
+
+      # ─── Build & restart on VPS ────────────────────────────────
+      - name: Build and deploy on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.VPS_SSH_USER }}@${{ env.VPS_HOST }} << 'DEPLOY'
+            set -euo pipefail
+            cd ${{ env.DEPLOY_PATH }}
+
+            echo "── Building Docker images ──"
+            docker compose build --no-cache
+
+            echo "── Running database migrations ──"
+            docker compose run --rm backend npx prisma migrate deploy
+
+            echo "── Restarting services ──"
+            docker compose up -d --force-recreate
+
+            echo "── Waiting for health check ──"
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:3001/api/health > /dev/null 2>&1; then
+                echo "Backend healthy after ${i}s"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "ERROR: Backend failed health check after 30s"
+                docker compose logs backend --tail=50
+                exit 1
+              fi
+              sleep 1
+            done
+
+            echo "── Pruning old images ──"
+            docker image prune -f
+
+            echo "── Deploy complete ──"
+          DEPLOY
+
+      # ─── Rollback on failure ───────────────────────────────────
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.VPS_SSH_USER }}@${{ env.VPS_HOST }} << 'ROLLBACK'
+            set -euo pipefail
+            cd ${{ env.DEPLOY_PATH }}
+            echo "── Rolling back to previous image ──"
+            docker compose down
+            # Rebuild from previous commit's Dockerfiles
+            git checkout HEAD~1 -- backend/Dockerfile frontend/Dockerfile docker-compose.yml
+            docker compose build
+            docker compose up -d
+            echo "── Rollback complete ──"
+          ROLLBACK

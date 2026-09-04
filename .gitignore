@@ -1,0 +1,44 @@
+# ────────────────────────────────────────────────────────────────────
+# D-Trips monorepo — root .gitignore
+# Patterns in this file apply to the whole tree (frontend/, backend/, …)
+# ────────────────────────────────────────────────────────────────────
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# Env / local secrets
+.env*
+!.env.example
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+.idea/
+Thumbs.db
+
+# Backend (NestJS) — additional patterns
+backend/coverage/
+backend/.nest/
+backend/prisma/migrations/*/migration_lock.toml.bak
+
+# Frontend — Vite-specific
+frontend/.vite/
+frontend/coverage/
+
+# Reference prototype (read-only historical archive; not part of active codebase)
+Website/

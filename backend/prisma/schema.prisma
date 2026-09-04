@@ -1,0 +1,565 @@
+// ────────────────────────────────────────────────────────────────────
+// D-Trips — Prisma schema (PostgreSQL)
+//
+// See ../D-Trips_Claude_Code_Prompt_FINAL*.md for full spec.
+// This file is the §34 phase-4 deliverable: complete entity set.
+// Migrations come later (run `npx prisma migrate dev --name init`).
+//
+// Conventions
+//   - Money: stored in EGP as integer minor units (piasters).
+//     §8 / §11: never JS floats, never trust client price.
+//   - UUIDs everywhere (no serial ints leaking business IDs).
+//   - createdAt/updatedAt on every entity.
+//   - Soft delete via `isActive`/`status` flags, not DELETE rows,
+//     so audit history is preserved per §15.
+// ────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  // SUPER_ADMIN, STAFF reserved per §13 for future extension.
+  // Do not add now — keep role enum narrow per the spec's explicit decision.
+}
+
+enum BookingOrigin {
+  TOUR
+  CUSTOM_TRIP
+}
+
+enum BookingStatus {
+  DRAFT
+  PENDING
+  PAYMENT_PENDING
+  PAID
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum PaymentGateway {
+  EASYCASH
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+}
+
+enum ContactMessageStatus {
+  NEW
+  REPLIED
+  ARCHIVED
+}
+
+enum PromoCodeType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum PromoCodeScope {
+  ALL
+  TOURS
+  CATEGORIES
+}
+
+enum EmailEventType {
+  WELCOME
+  BOOKING_CREATED
+  BOOKING_CONFIRMATION
+  BOOKING_UPDATE
+  BOOKING_CANCELLATION
+  TOUR_CANCELLED_BULK
+  PAYMENT_CONFIRMATION
+  PAYMENT_FAILED
+  PASSWORD_RESET
+  TOUR_REMINDER
+  CONTACT_MESSAGE_RECEIVED
+  TRIP_REQUEST_RECEIVED
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  RETRYING
+}
+
+// Audit action enum kept as string (§15 asks for JSON metadata; enum too rigid).
+
+// ─── Auth & users (§13) ──────────────────────────────────────────────
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  passwordHash    String
+  role            Role           @default(CUSTOMER)
+  name            String?
+  phone           String?
+  emailVerifiedAt DateTime?
+  // §15 / §18 — admin-managed block flag. JwtAccessGuard and
+  // JwtRefreshGuard re-check this on every request so a block
+  // takes effect immediately (no waiting for access-token TTL).
+  // Admins cannot block themselves — the controller enforces.
+  isBlocked       Boolean        @default(false)
+  blockReason     String?
+  blockedAt       DateTime?
+  // §13 — notification preferences. Defaults are conservative:
+  // booking-related emails on (the customer just paid for them),
+  // marketing/sms off (opt-in, not opt-out).
+  bookingEmails     Boolean      @default(true)
+  marketingEmails   Boolean      @default(false)
+  smsReminders      Boolean      @default(false)
+  // Refresh-token rotation state. Hashes only — never the raw token.
+  refreshTokens   RefreshToken[]
+  // Account metadata
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  bookings         Booking[]             @relation("UserBookings")
+  reviews          Review[]
+  promoRedemptions PromoCodeRedemption[]
+  auditLogs        AuditLog[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ─── Tours (§7) ───────────────────────────────────────────────────────
+
+model Category {
+  id           String  @id @default(uuid())
+  slug         String  @unique
+  // §25 — display name is per-locale via SiteContent
+  // (key: `category:{slug}:name`, locales: en/ar). The `name`
+  // field below is the English default until the i18n pipeline
+  // ships; SiteContent wins once populated.
+  name         String
+  isActive     Boolean @default(true)
+  displayOrder Int     @default(0)
+  tours        Tour[]
+}
+
+model Destination {
+  id       String  @id @default(uuid())
+  slug     String  @unique
+  // §25 — see Category.name above; SiteContent overrides per locale.
+  name     String
+  isActive Boolean @default(true)
+  tours    Tour[]
+}
+
+model Tour {
+  id                 String       @id @default(uuid())
+  slug               String       @unique
+  title              String
+  shortDescription   String       @db.VarChar(280)
+  description        String
+  categoryId         String
+  category           Category     @relation(fields: [categoryId], references: [id])
+  destinationId      String?
+  destination        Destination? @relation(fields: [destinationId], references: [id])
+  // Money — stored as integer minor units (EGP piasters). §8/§11.
+  startingPrice      Int
+  currency           String       @default("EGP")
+  durationDays       Int
+  isPublished        Boolean      @default(false)
+  // §7 — Bunny Storage IDs land here once the upload pipeline ships.
+  // For v1 the admin pastes a direct CDN URL into coverImageId and
+  // TourImage.src; the column shape stays compatible.
+  coverImageId       String?
+  images             TourImage[]
+  dates              TourDate[]
+  itinerary          Json? // ordered day-by-day entries
+  included           String[]
+  excluded           String[]
+  meetingInfo        String?
+  cancellationPolicy String?
+  bookings           Booking[]
+  reviews            Review[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([categoryId])
+  @@index([destinationId])
+  @@index([isPublished])
+  @@index([startingPrice])
+  @@index([durationDays])
+}
+
+model TourImage {
+  id           String  @id @default(uuid())
+  tourId       String
+  tour         Tour    @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  // Bunny Storage ID or external URL.
+  src          String
+  alt          String?
+  displayOrder Int     @default(0)
+
+  @@index([tourId])
+}
+
+// Availability with row-level locking target (§9).
+// `remainingCapacity` is the live counter; SELECT ... FOR UPDATE inside a
+// Prisma interactive transaction prevents over-booking.
+model TourDate {
+  id                String    @id @default(uuid())
+  tourId            String
+  tour              Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  startDate         DateTime
+  endDate           DateTime
+  capacity          Int
+  remainingCapacity Int
+  bookings          Booking[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([tourId, startDate])
+  @@index([startDate])
+}
+
+// ─── Build-Trip wizard (§7) ──────────────────────────────────────────
+
+model TripTypePreset {
+  id           String        @id @default(uuid())
+  slug         String        @unique
+  // §25 — SiteContent (key: trip_type:{slug}:name) overrides per locale
+  // when populated; `name` is the English default for v1.
+  name         String
+  imageId      String? // Bunny Storage ID once the media pipeline lands
+  displayOrder Int           @default(0)
+  isActive     Boolean       @default(true)
+  requests     TripRequest[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model TripRequest {
+  id               String         @id @default(uuid())
+  userId           String?
+  tripTypePresetId String
+  tripTypePreset   TripTypePreset @relation(fields: [tripTypePresetId], references: [id])
+  // Wizard payload — destinations array, "other" free text, date range, etc.
+  destinations     Json
+  otherDestination String?
+  dateFrom         DateTime?
+  dateTo           DateTime?
+  duration         String?
+  travelers        Int            @default(2)
+  budget           String?
+  notes            String?
+  contactName      String
+  contactEmail     String
+  contactPhone     String
+  status           BookingStatus  @default(PENDING)
+  booking          Booking?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+// ─── Bookings + state machine (§8, §10) ──────────────────────────────
+
+model Booking {
+  id                String        @id @default(uuid())
+  // Nullable userId per §28 (guest checkout) — every booking still carries
+  // guestEmail so a later registration can claim past bookings.
+  userId            String?
+  user              User?         @relation("UserBookings", fields: [userId], references: [id])
+  guestEmail        String
+  guestName         String
+  guestPhone        String?
+  origin            BookingOrigin
+  tourId            String?
+  tour              Tour?         @relation(fields: [tourId], references: [id])
+  tourDateId        String?
+  tourDate          TourDate?     @relation(fields: [tourDateId], references: [id])
+  tripRequestId     String?       @unique
+  tripRequest       TripRequest?  @relation(fields: [tripRequestId], references: [id])
+  travelerCount     Int
+  travelerNames     String[]
+  specialRequests   String?
+  pickupLocation    String?
+  subtotal          Int // EGP piasters
+  discountAmount    Int           @default(0)
+  total             Int // EGP piasters — authoritative per §8
+  currency          String        @default("EGP")
+  promoCodeId       String?
+  promoCode         PromoCode?    @relation(fields: [promoCodeId], references: [id])
+  // §8 — explicit T&C + Privacy consent captured at checkout, with timestamp.
+  consentAcceptedAt DateTime?
+  status            BookingStatus @default(PENDING)
+  // §11-style idempotency — required by the API contract on
+  // POST /api/bookings via the Idempotency-Key header. A repeat of
+  // the same key returns the existing booking instead of creating
+  // a duplicate. Unique per the DB; client owns the key (UUID).
+  idempotencyKey    String        @unique
+  payments          Payment[]
+  review            Review?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([guestEmail])
+  @@index([status])
+}
+
+// ─── Payments (§11) ──────────────────────────────────────────────────
+
+model Payment {
+  id                   String         @id @default(uuid())
+  bookingId            String
+  booking              Booking        @relation(fields: [bookingId], references: [id])
+  gateway              PaymentGateway
+  gatewayTransactionId String?
+  amount               Int // EGP piasters — authoritative server-side (§11)
+  currency             String         @default("EGP")
+  status               PaymentStatus  @default(PENDING)
+  // §11 — idempotency for createIntent. Required by the API contract
+  // via the Idempotency-Key header (same key as the booking intent
+  // is fine — server de-duplicates the Payment row by key).
+  idempotencyKey       String         @unique
+  // §11 — for FAILED payments, capture the gateway's reason so the
+  // customer-facing UI can render a specific message.
+  failureCode          String?
+  failureMessage       String?
+  gatewayResponse      Json? // last known gateway payload (no secrets)
+  events               PaymentEvent[]
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@unique([gateway, gatewayTransactionId])
+  @@index([bookingId])
+  @@index([status])
+}
+
+// Append-only ledger (§11) — idempotency key is gatewayEventId.
+model PaymentEvent {
+  id             String   @id @default(uuid())
+  paymentId      String
+  payment        Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  gatewayEventId String   @unique
+  eventType      String
+  payload        Json
+  processedAt    DateTime @default(now())
+
+  @@index([paymentId])
+}
+
+// ─── Reviews (§14) — eligibility = COMPLETED booking only ───────────
+
+model Review {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  tourId      String
+  tour        Tour         @relation(fields: [tourId], references: [id])
+  bookingId   String       @unique
+  booking     Booking      @relation(fields: [bookingId], references: [id])
+  rating      Int // 1..5 — enforce in DTO + DB check
+  title       String?
+  body        String
+  status      ReviewStatus @default(PENDING) // published via admin moderation
+  createdAt   DateTime     @default(now())
+  publishedAt DateTime?
+
+  @@index([tourId, status])
+}
+
+// ─── FAQs (§15) ──────────────────────────────────────────────────────
+
+model FAQ {
+  id           String   @id @default(uuid())
+  question     String
+  answer       String
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  category     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ─── Contact-messages inbox (§24) ────────────────────────────────────
+
+model ContactMessage {
+  id         String               @id @default(uuid())
+  name       String
+  email      String
+  phone      String?
+  subject    String
+  body       String
+  status     ContactMessageStatus @default(NEW)
+  receivedAt DateTime             @default(now())
+  repliedAt  DateTime?
+  repliedBy  String?
+
+  @@index([status])
+  @@index([receivedAt])
+}
+
+// ─── Promo codes (§29) ───────────────────────────────────────────────
+
+model PromoCode {
+  id                    String                @id @default(uuid())
+  code                  String                @unique
+  type                  PromoCodeType
+  value                 Int // percent (0..100) or piaster amount — enforced by service layer
+  minBookingAmount      Int?
+  scope                 PromoCodeScope        @default(ALL)
+  // Specific scopes are joined in PromoCodeScope* tables or kept as arrays
+  // for v1 simplicity; a tighter schema may follow.
+  scopeTourIds          String[]              @default([])
+  scopeCategoryIds      String[]              @default([])
+  startDate             DateTime?
+  endDate               DateTime?
+  totalUsageLimit       Int?
+  perCustomerUsageLimit Int?
+  isActive              Boolean               @default(true)
+  redeemedCount         Int                   @default(0)
+  redemptions           PromoCodeRedemption[]
+  bookings              Booking[]
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+}
+
+model PromoCodeRedemption {
+  id             String    @id @default(uuid())
+  promoCodeId    String
+  promoCode      PromoCode @relation(fields: [promoCodeId], references: [id])
+  bookingId      String    @unique
+  userId         String?
+  user           User?     @relation(fields: [userId], references: [id])
+  discountAmount Int // EGP piasters
+  redeemedAt     DateTime  @default(now())
+
+  @@index([promoCodeId])
+  @@index([userId])
+}
+
+// ─── Audit log (§15) ─────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  adminUserId String
+  admin       User     @relation(fields: [adminUserId], references: [id])
+  action      String // e.g. TOUR_UPDATED, REVIEW_PUBLISHED
+  entityType  String // e.g. Tour, Booking
+  entityId    String
+  metadata    Json // structured diff of changed fields — never secrets
+  createdAt   DateTime @default(now())
+
+  @@index([adminUserId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ─── Site content (§15, §26, §27) — DB-driven i18n ──────────────────
+
+model SiteContent {
+  id        String   @id @default(uuid())
+  // Key namespace: "homepage.hero", "about.body", "privacy_policy.body",
+  // "terms_conditions.body", "footer.social.instagram", etc.
+  key       String
+  locale    String // "en" | "ar" | future
+  content   Json // structured payload — string, rich text, link list, etc.
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@unique([key, locale])
+}
+
+model Currency {
+  code              String  @id // "EGP" | "USD" | future
+  symbol            String
+  exchangeRateToEgp Float // multiplier (1 USD = N EGP); refreshed by cron (§26)
+  isEnabled         Boolean @default(true)
+  isBase            Boolean @default(false) // exactly one row true (EGP)
+  displayOrder      Int     @default(0)
+}
+
+model Language {
+  code      String  @id // "en" | "ar" | future
+  name      String
+  isEnabled Boolean @default(true)
+  isDefault Boolean @default(false) // exactly one row true
+  isRtl     Boolean @default(false)
+}
+
+// ─── Email delivery (§12) ────────────────────────────────────────
+
+model Notification {
+  id               String             @id @default(uuid())
+  eventType        EmailEventType
+  // Idempotency — one logical event → one Notification row. A retry
+  // bumps `attempts` on the same row; never creates a duplicate.
+  idempotencyKey   String             @unique
+  recipientEmail   String
+  recipientName    String?
+  subject          String
+  bodyHtml         String
+  bodyText         String
+  status           NotificationStatus @default(PENDING)
+  attempts         Int                @default(0)
+  maxAttempts      Int                @default(5)
+  lastError        String?
+  sentAt           DateTime?
+  // Optional FKs — depending on the event
+  userId           String?
+  bookingId        String?
+  paymentId        String?
+  tripRequestId    String?
+  reviewId         String?
+  contactMessageId String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([status, attempts])
+  @@index([recipientEmail])
+  @@index([eventType, createdAt])
+}
+
+// ─── Newsletter (§15A) ─────────────────────────────────────────────
+//
+// Simple email-capture list for the footer form. Phase 15A §6.4:
+// "real, not fake form". v1 keeps it minimal — no admin management,
+// no double-opt-in. Just persist email + timestamp; upsert on duplicate
+// so a returning visitor silently re-subscribes without an error.
+
+model NewsletterSubscriber {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
