@@ -1,4 +1,4 @@
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -17,6 +17,7 @@ export class EnvSchema {
   @IsEnum(['development', 'test', 'production'])
   NODE_ENV: 'development' | 'test' | 'production' = 'development';
 
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   PORT = 3001;
@@ -42,6 +43,7 @@ export class EnvSchema {
   @IsString()
   JWT_REFRESH_TTL = '7d';
 
+  @Type(() => Number)
   @IsInt()
   @Min(4)
   @IsOptional()

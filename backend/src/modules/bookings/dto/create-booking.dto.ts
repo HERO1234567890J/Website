@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsDateString,
+  IsEmail,
   IsEnum,
   IsInt,
   IsISO8601,
@@ -150,7 +151,6 @@ export class ClaimBookingDto {
 // pattern is verified inline. Kept inline to avoid pulling the
 // extra decorator into the bundle.
 function IsEmailSafe(): (target: object, key: string) => void {
-  const { IsEmail } = require('class-validator');
   return IsEmail({}, { message: 'matchingEmail must be a valid email.' });
 }
 
