@@ -52,7 +52,7 @@ export class AuthService {
       throw new ConflictException('Could not register with these details.');
     }
 
-    const rounds = this.config.get<number>('BCRYPT_ROUNDS', 12);
+    const rounds = parseInt(this.config.get<string>('BCRYPT_ROUNDS', '12'), 10);
     const passwordHash = await bcrypt.hash(dto.password, rounds);
 
     const user = await this.prisma.user.create({
@@ -151,7 +151,7 @@ export class AuthService {
   } {
     return {
       httpOnly: true,
-      secure: this.config.get<string>('NODE_ENV') === 'production',
+      secure: this.config.get<string>('COOKIE_SECURE', 'true') === 'true',
       sameSite: 'lax',
       path: '/',
       maxAge: this.refreshCookieMaxAgeMs(),

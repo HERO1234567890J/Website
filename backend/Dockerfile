@@ -17,7 +17,7 @@ WORKDIR /app
 
 # Layer cache — install deps first, copy source after.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Copy source, generate Prisma client, build NestJS
 COPY . .

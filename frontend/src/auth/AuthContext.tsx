@@ -63,7 +63,7 @@ export interface AuthState {
   accessToken: string | null;
   /** True while the silent refresh-on-mount is in flight. */
   isBooting: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Manual refresh — exposed mainly for tests / future hooks. */
@@ -156,6 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setAccessToken(data.accessToken);
     setUser(data.user);
+    return data.user;
   }, []);
 
   const register = useCallback(

@@ -15,8 +15,13 @@ export function Login() {
     e.preventDefault();
     if (isLoading) return;
     try {
-      await login(email, password);
-      navigate(decodeURIComponent(next));
+      const loggedInUser = await login(email, password);
+      const hasExplicitNext = params.get('next') !== null;
+      if (!hasExplicitNext && loggedInUser.role === 'ADMIN') {
+        navigate('/admin');
+      } else {
+        navigate(decodeURIComponent(next));
+      }
     } catch {
       // error already surfaced via useAuthFlow; nothing else to do.
     }

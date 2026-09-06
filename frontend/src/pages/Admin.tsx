@@ -118,6 +118,7 @@ const TITLES: Record<AdminPage, string> = {
 export function Admin() {
   const [page, setPage] = useState<AdminPage>('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user } = useAuth();
 
   return (
     <div className="shell">
@@ -296,10 +297,10 @@ export function Admin() {
               <span className="bell-dot" />
             </div>
             <div className="admin-chip">
-              <div className="admin-avatar">DF</div>
+              <div className="admin-avatar">{userInitials(user?.name ?? null, user?.email ?? '')}</div>
               <div className="who">
-                <b>David Fakher</b>
-                <span>Super Admin</span>
+                <b>{user?.name ?? user?.email ?? 'Admin'}</b>
+                <span>{user?.role === 'ADMIN' ? 'Super Admin' : user?.role}</span>
               </div>
             </div>
           </div>

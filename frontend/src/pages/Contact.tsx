@@ -1,12 +1,47 @@
+import { useEffect, useState } from 'react';
 import { Eyebrow } from '@/components/site/Eyebrow';
 import { Perf } from '@/components/site/Perf';
 import { SEED_IMAGES } from '@/lib/seed-images';
 import { CONTACT_COUNTRY_CODES, useContactForm } from '@/hooks/useContactForm';
+import { getSiteContent } from '@/lib/api/site-content';
 import { Link } from 'react-router-dom';
+
+interface ContactDetails {
+  phone: string;
+  email: string;
+  whatsapp: string;
+}
+
+const DEFAULT_CONTACT: ContactDetails = {
+  phone: '+201092878580',
+  email: 'hello@d-trips.com',
+  whatsapp: '201092878580',
+};
 
 export function Contact() {
   const { values, errors, isSubmitting, submitted, submitError, canSubmit, setField, submit } =
     useContactForm();
+  const [contact, setContact] = useState<ContactDetails>(DEFAULT_CONTACT);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSiteContent('company.contact', 'en')
+      .then((row) => {
+        if (cancelled || !row) return;
+        const c = row.content as Partial<ContactDetails>;
+        setContact((prev) => ({
+          phone: typeof c.phone === 'string' && c.phone ? c.phone : prev.phone,
+          email: typeof c.email === 'string' && c.email ? c.email : prev.email,
+          whatsapp: typeof c.whatsapp === 'string' && c.whatsapp ? c.whatsapp : prev.whatsapp,
+        }));
+      })
+      .catch(() => {
+        // keep defaults on failure — contact page must never break.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -180,7 +215,7 @@ export function Contact() {
               </div>
               <div>
                 <h4>Email</h4>
-                <a href="mailto:hello@d-trips.com">hello@d-trips.com</a>
+                <a href={`mailto:${contact.email}`}>{contact.email}</a>
                 <span className="subline">Answers within 1 working day</span>
               </div>
             </div>
@@ -193,7 +228,7 @@ export function Contact() {
               </div>
               <div>
                 <h4>Phone</h4>
-                <a href="tel:+201092878580">+20 010 9287 8580</a>
+                <a href={`tel:${contact.phone}`}>{contact.phone}</a>
                 <span className="subline">Sun–Thu, 10am – 6pm Cairo time</span>
               </div>
             </div>
@@ -206,7 +241,7 @@ export function Contact() {
               </div>
               <div>
                 <h4>WhatsApp</h4>
-                <a href="https://wa.me/201092878580">+20 010 9287 8580</a>
+                <a href={`https://wa.me/${contact.whatsapp}`}>{contact.phone}</a>
                 <span className="subline">Fastest way to reach a real human</span>
               </div>
             </div>

@@ -15,7 +15,7 @@ export interface UseAuthFlowResult {
   user: User | null;
   isLoading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   resetError: () => void;
@@ -47,11 +47,11 @@ export function useAuthFlow(): UseAuthFlowResult {
   const resetError = useCallback(() => setError(null), []);
 
   const run = useCallback(
-    async (action: () => Promise<void>, fallbackMsg: string): Promise<void> => {
+    async <T,>(action: () => Promise<T>, fallbackMsg: string): Promise<T> => {
       setIsLoading(true);
       setError(null);
       try {
-        await action();
+        return await action();
       } catch (err) {
         setError(toMessage(err, fallbackMsg));
         throw err;
